@@ -1,0 +1,4 @@
+[submodule "thirdparty/wind"]
+	path = thirdparty/wind
+	url = https://github.com/timepp/wind
+	branch = master

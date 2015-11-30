@@ -1,0 +1,6 @@
+name "calldll"
+description "A minimal D application."
+copyright "Copyright © 2015, idtong"
+authors "idtong"
+dependency "wind" path="thirdparty/wind"
+sourceFiles "$WIND_PACKAGE_DIR/binaries/windows_manifest_x86.res" platform="windows-x86"
