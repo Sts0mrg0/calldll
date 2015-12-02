@@ -3,19 +3,25 @@ import core.sys.windows.windows;
 import std.getopt;
 import std.stdio;
 import std.string;
+import std.json;
 import std.conv;
 import std.utf;
 import wind.string;
+
+bool hexDisplay;
+bool silentMode;
+string[][] callbackReceives;
 
 struct FunctionParameter
 {
     string type;
     string value;
+    string[] subtypes; // for struct members
 
     uint rawParam; // the real param that pushed to call stack
 
     // since we cast c-style string pointers to uint for asm-level parameter passing,
-    // there must be at least one reference to each c-string to make sure they won't be freed.
+    // there must be at least one reference to each temporary c-string to make sure they won't be freed.
     void*[] strref;
 
     // buffer to receive data as an output parameter
@@ -58,7 +64,7 @@ void CallbackFunction()
         jmp CMP;
 
     CALL:
-        call DisplayCallbackParameters;
+        call collectCallbackParameters;
 
         // before we return we must clean up the passed parameters because Windows expect the callback to clear the 
         // parameter. 
@@ -89,15 +95,14 @@ void CallbackFunction()
     }
 }
 
-void DisplayCallbackParameters()
+void collectCallbackParameters()
 {
-    string str = "  ";
+    string[] values;
     foreach (param; callbackParams)
     {
-        str ~= decodeRawData(param.type, param.rawParam, 0);
-        str ~= " ";
+        values ~= decodeRawData(param.type, param.rawParam, 0);
     }
-    writeln(str);
+    callbackReceives ~= values;
 }
 
 uint toUint(string str)
@@ -121,20 +126,48 @@ string decodeRawData(string basetype, uint data, uint len)
     switch (basetype)
     {
     case "str":
-        return stringFromCStringA(cast(void*)data);
+        return JSONValue(stringFromCStringA(cast(void*)data)).toString();
     case "wstr":
-        return stringFromCStringW(cast(void*)data);
+        return JSONValue(stringFromCStringW(cast(void*)data)).toString();
     case "plen":
     case "pint":
         return to!string(*cast(uint*)data);
     case "buffer":
         return hexDump(cast(void*)data, len);
     case "int":
-        return to!string(data);
+    case "word":
+        return (hexDisplay?"0x":"") ~ to!string(data, hexDisplay?16:10);
     default:
         return "";
     }
 }
+
+string decodeParam(FunctionParameter param)
+{
+    string basetype = getBasetype(param.type);
+    if (basetype != "struct" && basetype != "pstruct")
+        return decodeRawData(basetype, cast(uint)param.buffer, param.bufferlen);
+
+    // struct
+    string[] values;
+    void* p = param.buffer;
+    foreach (t; param.subtypes)
+    {
+        switch (t)
+        {
+        default:
+            values ~= decodeRawData(t, cast(uint)p, 0);
+            p += 4;
+            break;
+        case "word":
+            uint tmp = *(cast(short*)p);
+            values ~= decodeRawData(t, tmp, 0);
+            p += 2;
+        }
+    }
+    return values.join(",");
+}
+                             
 
 /// Call an address with dynamic parameters which are stored in params
 uint callFunction(const(void)* funcaddr, FunctionParameter[] params)
@@ -171,8 +204,10 @@ uint callFunction(const(void)* funcaddr, FunctionParameter[] params)
 string generalHelp = `
 parameter spec        description
 ==============        =========================================================
-int:<number>          integer. matches DWORD, UINT, and other compitable types
-len:<number>          integer, also specifies the length of the previous param
+int:<number>          matches all 32 bit compitable integral types.
+word:<number>         the same as "int", but only occupy 2 bytes inside struct.
+len:<number>          used when previous param is a buffer. in such case it
+                      specifies the buffer size.
 str:<string>          ANSI string. maches LPCSTR
 wstr:<string>         UNICODE string. matches LPCWSTR
 out-pint              output integer. matches LPDWORD, ...
@@ -183,6 +218,7 @@ out-wstr:<number>     output UNICODE string. matches LPWSTR
 out-buffer:<number>   output buffer. matches all output pointers that have
                       array semantics. 
 struct:<{t:v,t:v...}> structure.
+out-pstruct:<{t,t,t}> output structure.
 callback:<t,t,t:ret>  callback function.
 
 <number> can be any decimal or hex values. e.g. 10, 256, 0x80, 0xFFFF
@@ -215,10 +251,10 @@ calldll user32.dll EnumWindows callback:int,int:0 int:0x100
 
 void main(string[] args)
 {
-    bool hexDisplay;
     auto helpInformation = getopt(
         args, 
-        "hexdisp", "Hex display mode: display integers with hex", &hexDisplay
+        "hexdisp", "Hex display mode: display integers with hex", &hexDisplay,
+        "silent|S", "silent mode: do not print anything", &silentMode
         );
     if (helpInformation.helpWanted || args.length < 3)
     {
@@ -264,6 +300,7 @@ void main(string[] args)
             
         case "len":
         case "int":
+        case "word":
             param.rawParam = toUint(param.value);
             break;
         
@@ -328,49 +365,71 @@ void main(string[] args)
             
         case "struct":
             string[] fields = split(param.value, ",");
-            uint* buffer = cast(uint*)GC.malloc(fields.length * 4);
-            foreach (j, field; fields)
+            param.bufferlen = fields.length * 4;
+            param.buffer = GC.malloc(param.bufferlen);
+            param.rawParam = cast(uint)param.buffer;
+            void* p = param.buffer;
+            foreach (field; fields)
             {
-                string k = splitHead(field, ':');
+                string t = splitHead(field, ':');
                 string v = splitTail(field, ':', "");
-                if (k == "int")
+                param.subtypes ~= t;
+                switch (t)
                 {
-                    buffer[j] = toUint(v);
-                }
-                else if (k == "str")
-                {
+                case "int":
+                    *(cast(uint*)p) = toUint(v);
+                    p += 4;
+                    break;
+                case "word":
+                    *(cast(short*)p) = cast(short)(toUint(v));
+                    p += 2;
+                    break;
+                case "str":
                     auto str = v.toStringz();
                     param.strref ~= cast(void*)str;
-                    buffer[j] = cast(uint)str;
-                }
-                else if (k == "wstr")
-                {
+                    *(cast(uint*)p) = cast(uint)str;
+                    p += 4;
+                    break;
+                case "wstr":
                     auto wstr = v.toUTF16z();
                     param.strref ~= cast(void*)wstr;
-                    buffer[j] = cast(uint)wstr;
+                    *(cast(uint*)p) = cast(uint)wstr;
+                    p += 4;
+                    break;
+                default:
+                    writeln("unknow struct member type.");
+                    return;
                 }
             }
-            param.rawParam = cast(uint)buffer;
+            break;
+
+        case "out-pstruct":
+            param.subtypes = split(param.value, ",");
+            param.bufferlen = param.subtypes.length * 4;
+            param.buffer = GC.malloc(param.bufferlen);
+            param.rawParam = cast(uint)param.buffer;
             break;
         }
     }
-    
-    switch (count!((a) => a.type == "callback")(params))
+
+    uint callbackCount = count!((a) => a.type == "callback")(params);
+    if (callbackCount > 1)
     {
-    case 0:
-        break;
-    case 1:
-        writeln("callback receives:");
-        break;
-    default:
         writeln("at most one parameter can be 'callback'");
         return;
     }
                 
     uint retval = callFunction(addr, params);
 
+    if (silentMode)
+    {
+        return;
+    }
+
+    uint lastError = GetLastError();
     string retstr = decodeRawData(returnType, retval, 0);
     writeln("return value:", retstr);
+    writeln("last error:", lastError);
 
     string outputParamValues;
     foreach (index, param; params)
@@ -378,7 +437,7 @@ void main(string[] args)
         if (!param.type.startsWith("out-") && !param.type.startsWith("inout-")) 
             continue;
 
-        string value = decodeRawData(getBasetype(param.type), cast(uint)param.buffer, param.bufferlen);
+        string value = decodeParam(param);
         outputParamValues ~= "  param" ~ to!string(index+1) ~ "=" ~ value ~ "\n";
     }
     if (outputParamValues.length)
@@ -386,4 +445,14 @@ void main(string[] args)
         writeln("output params:");
         writeln(outputParamValues);
     }
+
+    if (callbackCount > 0)
+    {
+        writeln("callback receives:");
+        foreach (values; callbackReceives)
+        {
+            writeln("    ", values.join(","));
+        }
+    }
 }
+

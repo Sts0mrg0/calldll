@@ -12,9 +12,13 @@ calldll user32.dll EnumWindows callback:int,int:0 int:0x100
 calldll psapi.dll EnumProcesses out-buffer:532 len:532 out-pint
 calldll kernel32.dll EnumUILanguagesW callback:wstr,int:1 int:0x28 int:0
 
-calldll kernel32.dll Sleep int:2000 >nul
+calldll kernel32.dll Sleep int:1000 >nul
 
 calldll shell32.dll ShellExecuteA int:0 str:runas str:cmd.exe int:0 int:0 int:5
+
+calldll  kernel32.dll SetConsoleTextAttribute int:64 int:0xC >nul
+@echo This is a warning message in red
+@calldll  kernel32.dll SetConsoleTextAttribute int:64 int:0x7 >nul
 
 
 
