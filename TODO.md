@@ -1,4 +1,5 @@
-1. out-struct support (GetSystemTime)
-2. 2 steps call (SetFileTime)
-1) CreateFile returns file handle
-2) SetFileTime using this file handle
+# client-server mode
+
+`calldll --start-server` start calldll.exe as a server process and wait client to connect
+`calldll --stop-server` stop the server process
+

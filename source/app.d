@@ -18,7 +18,7 @@ struct FunctionParameter
     string value;
     string[] subtypes; // for struct members
 
-    uint rawParam; // the real param that pushed to call stack
+    size_t rawParam; // the real param that pushed to call stack
 
     // since we cast c-style string pointers to uint for asm-level parameter passing,
     // there must be at least one reference to each temporary c-string to make sure they won't be freed.
@@ -26,74 +26,79 @@ struct FunctionParameter
 
     // buffer to receive data as an output parameter
     void* buffer;
-    uint bufferlen;
+    size_t bufferlen;
 };
 
 __gshared FunctionParameter[] callbackParams;
 __gshared uint callbackReturnValue;
 
+
 void CallbackFunction()
 {
     asm { naked; }
 
-    asm
+    version (X86)
     {
-        push EBP;
-        mov EBP, ESP;
-        push ECX;
-        push EDX;
-        push ESI;
-        push EDI;
+        asm
+        {
+            push EBP;
+            mov EBP, ESP;
+            push ECX;
+            push EDX;
+            push ESI;
+            push EDI;
 
-        mov EDI, dword ptr[callbackParams];
-        mov ESI, 0;
+            mov EDI, dword ptr[callbackParams];
+            mov ESI, 0;
 
-    CMP:
-        cmp ESI, EDI;
-        jge CALL;
+        CMP:
+            cmp ESI, EDI;
+            jge CALL;
 
-        mov ECX, dword ptr [EBP + 8 + ESI*4];
-        // the position of callbackParams[i].rawParam
-        // := *(&callbackParams + 4) + FunctionParameter.sizeof * i + FunctionParameter.rawParam.offsetof
-        mov EAX, FunctionParameter.sizeof;
-        mul ESI;
-        mov EDX, dword ptr [callbackParams + 4];
-        mov dword ptr [EDX + EAX + FunctionParameter.rawParam.offsetof], ECX;
+            mov ECX, dword ptr [EBP + 8 + ESI*4];
+            // the position of callbackParams[i].rawParam
+            // := *(&callbackParams + 4) + FunctionParameter.sizeof * i + FunctionParameter.rawParam.offsetof
+            mov EAX, FunctionParameter.sizeof;
+            mul ESI;
+            mov EDX, dword ptr [callbackParams + 4];
+            mov dword ptr [EDX + EAX + FunctionParameter.rawParam.offsetof], ECX;
 
-        inc ESI;
-        jmp CMP;
+            inc ESI;
+            jmp CMP;
 
-    CALL:
-        call collectCallbackParameters;
+        CALL:
+            call collectCallbackParameters;
 
-        // before we return we must clean up the passed parameters because Windows expect the callback to clear the 
-        // parameter. 
-        // typically the callee uses 'RET n' to achieve this. however we cannot use it because the parameter count
-        // cannot be determined at compile time.
-        // below is our algorithm:
-        // [original EBP value] [return address] [param 1] [param 2] ... [param n]
-        // ^(EBP points here)
-        // 1. copy return-address to the first pushed param (param n) position on the stack
-        // 2. restore registers and epilog as usual
-        // 3. move esp to the first pushed param position on the stack, which is the caller expected after 'RET'
-        // 4. set return value and RET
+            // before we return we must clean up the passed parameters because Windows expect the callback to clear the 
+            // parameter. 
+            // typically the callee uses 'RET n' to achieve this. however we cannot use it because the parameter count
+            // cannot be determined at compile time.
+            // below is our algorithm:
+            // [original EBP value] [return address] [param 1] [param 2] ... [param n]
+            // ^(EBP points here)
+            // 1. copy return-address to the first pushed param (param n) position on the stack
+            // 2. restore registers and epilog as usual
+            // 3. move esp to the first pushed param position on the stack, which is the caller expected after 'RET'
+            // 4. set return value and RET
 
-        lea EAX, dword ptr [EBP + 4 + ESI*4];
-        mov ECX, dword ptr [EBP + 4];
-        mov dword ptr [EAX], ECX;
+            lea EAX, dword ptr [EBP + 4 + ESI*4];
+            mov ECX, dword ptr [EBP + 4];
+            mov dword ptr [EAX], ECX;
 
-        pop EDI;
-        pop ESI;
-        pop EDX;
-        pop ECX;
-        mov ESP, EBP;
-        pop EBP;
+            pop EDI;
+            pop ESI;
+            pop EDX;
+            pop ECX;
+            mov ESP, EBP;
+            pop EBP;
 
-        mov ESP, EAX;
-        mov EAX, dword ptr [callbackReturnValue];
-        ret;
+            mov ESP, EAX;
+            mov EAX, dword ptr [callbackReturnValue];
+            ret;
+        }
     }
 }
+
 
 void collectCallbackParameters()
 {
@@ -121,7 +126,7 @@ string getBasetype(string type)
     return splitTail(type, '-', type);
 }
 
-string decodeRawData(string basetype, uint data, uint len)
+string decodeRawData(string basetype, size_t data, size_t len)
 {
     switch (basetype)
     {
@@ -173,31 +178,60 @@ string decodeParam(FunctionParameter param)
 uint callFunction(const(void)* funcaddr, FunctionParameter[] params)
 {
     uint retval = 0;
-    asm
+
+    version (X86)
     {
-        push ECX;
-        push EDX;
+        asm
+        {
+            push ECX;
+            push EDX;
         
-        mov ECX, dword ptr [params];
+            mov ECX, dword ptr [params];
         CMP:
-        cmp ECX, 0;
-        je CALL;
-        sub ECX, 1;
+            cmp ECX, 0;
+            je CALL;
+            sub ECX, 1;
 
-        // the position of params[i].rawParam
-        // := *(&params + 4) + FunctionParameter.sizeof * i + FunctionParameter.rawParam.offsetof
-        mov EAX, FunctionParameter.sizeof;
-        mul ECX;
-        mov EDX, dword ptr [params + 4];
-        push dword ptr [EDX + EAX + FunctionParameter.rawParam.offsetof];
-        jmp CMP;
+            // the position of params[i].rawParam
+            // := *(&params + 4) + FunctionParameter.sizeof * i + FunctionParameter.rawParam.offsetof
+            mov EAX, FunctionParameter.sizeof;
+            mul ECX;
+            mov EDX, dword ptr [params + 4];
+            push dword ptr [EDX + EAX + FunctionParameter.rawParam.offsetof];
+            jmp CMP;
         CALL:
-        call funcaddr;
-        mov dword ptr [retval], EAX;
+            call funcaddr;
+            mov dword ptr [retval], EAX;
 
-        pop EDX;
-        pop ECX;
+            pop EDX;
+            pop ECX;
+        }
     }
+
+    version (X86_64)
+    {
+        asm
+        {
+            push RCX;
+            push RDX;
+            push RDI;
+            mov RDI, RSP;
+
+            // RCX, RDX, R8, R9, ...
+
+            mov RCX, qword ptr [params];
+
+        CALL:
+            call funcaddr;
+            mov dword ptr [retval], EAX;
+            
+            mov RSP, RDI;
+            pop RDI;
+            pop RDX;
+            pop RCX;
+        }
+    }
+    
     return retval;
 }
 
@@ -412,7 +446,7 @@ void main(string[] args)
         }
     }
 
-    uint callbackCount = count!((a) => a.type == "callback")(params);
+    size_t callbackCount = count!((a) => a.type == "callback")(params);
     if (callbackCount > 1)
     {
         writeln("at most one parameter can be 'callback'");

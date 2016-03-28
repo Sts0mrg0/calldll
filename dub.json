@@ -1,0 +1,11 @@
+{
+
+    "name": "calldll",
+    "description": "A minimal D application.",
+    "copyright": "Copyright © 2015, idtong",
+    "authors": ["idtong"],
+    "dependencies": {
+        "wind": { "path": "thirdparty/wind"}
+    },
+    "sourceFiles-x86": ["$WIND_PACKAGE_DIR/binaries/windows_manifest_x86.res"],
+}
