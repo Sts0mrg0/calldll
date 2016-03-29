@@ -20,7 +20,7 @@ struct FunctionParameter
 
     size_t rawParam; // the real param that pushed to call stack
 
-    // since we cast c-style string pointers to uint for asm-level parameter passing,
+    // since we cast c-style string pointers to integer for asm-level parameter passing,
     // there must be at least one reference to each temporary c-string to make sure they won't be freed.
     void*[] strref;
 
@@ -97,6 +97,54 @@ void CallbackFunction()
             ret;
         }
     }
+
+    version (X86_64)
+    {
+        asm
+        {
+            push RBP;
+            mov RBP, RSP;
+            push RCX;
+            push RDX;
+            push RSI;
+            push RDI;
+
+            mov qword ptr [RBP + 0x10], RCX;
+            mov qword ptr [RBP + 0x18], RDX;
+            mov qword ptr [RBP + 0x20], R8;
+            mov qword ptr [RBP + 0x28], R9;
+
+            mov RDI, qword ptr[callbackParams];
+            mov RSI, 0;
+
+        CMP:
+            cmp RSI, RDI;
+            jge CALL;
+
+            mov RCX, qword ptr [RBP + 0x10 + RSI*4];
+            // the position of callbackParams[i].rawParam
+            // := *(&callbackParams + 8) + FunctionParameter.sizeof * i + FunctionParameter.rawParam.offsetof
+            mov RAX, FunctionParameter.sizeof;
+            mul RSI;
+            mov RDX, qword ptr [callbackParams + 8];
+            mov qword ptr [RDX + RAX + FunctionParameter.rawParam.offsetof], RCX;
+
+            inc RSI;
+            jmp CMP;
+
+        CALL:
+            call collectCallbackParameters;
+
+            pop RDI;
+            pop RSI;
+            pop RDX;
+            pop RCX;
+            mov RSP, RBP;
+            pop RBP;
+            mov EAX, dword ptr [callbackReturnValue];
+            ret;
+        }
+    }
 }
 
 
@@ -110,15 +158,19 @@ void collectCallbackParameters()
     callbackReceives ~= values;
 }
 
-uint toUint(string str)
+size_t toUint(string str)
 {
     if (str.length == 0)
         return 0;
 
     if (str.startsWith("0x") || str.startsWith("0X"))
-        return to!uint(str[2..$], 16);
+        return to!size_t(str[2..$], 16);
 
-    return to!uint(str);
+    return to!size_t(str);
+}
+
+uint toUint32(string str) {
+    return cast(uint)toUint(str);
 }
 
 string getBasetype(string type)
@@ -151,7 +203,7 @@ string decodeParam(FunctionParameter param)
 {
     string basetype = getBasetype(param.type);
     if (basetype != "struct" && basetype != "pstruct")
-        return decodeRawData(basetype, cast(uint)param.buffer, param.bufferlen);
+        return decodeRawData(basetype, cast(size_t)param.buffer, param.bufferlen);
 
     // struct
     string[] values;
@@ -161,13 +213,13 @@ string decodeParam(FunctionParameter param)
         switch (t)
         {
         default:
-            values ~= decodeRawData(t, cast(uint)p, 0);
-            p += 4;
+            values ~= decodeRawData(t, cast(size_t)p, 0);
+            p += size_t.sizeof;
             break;
         case "word":
             uint tmp = *(cast(short*)p);
             values ~= decodeRawData(t, tmp, 0);
-            p += 2;
+            p += short.sizeof;
         }
     }
     return values.join(",");
@@ -186,7 +238,8 @@ uint callFunction(const(void)* funcaddr, FunctionParameter[] params)
             push ECX;
             push EDX;
         
-            mov ECX, dword ptr [params];
+            lea ECX, dword ptr [params];
+            mov ECX, dword ptr [ECX];
         CMP:
             cmp ECX, 0;
             je CALL;
@@ -215,17 +268,43 @@ uint callFunction(const(void)* funcaddr, FunctionParameter[] params)
             push RCX;
             push RDX;
             push RDI;
-            mov RDI, RSP;
-
-            // RCX, RDX, R8, R9, ...
+            push RSI;
+            push RBX;
+            mov RBX, RSP;
 
             mov RCX, qword ptr [params];
+            mov RCX, qword ptr [RCX];          // RCX <-- params.length
+            lea RDI, qword ptr [RCX * 8];
+            sub RSP, RDI;
+
+            // On X64 platform, RSP should be 16-byte aligned before calling another function.
+            and RSP, 0xFFFFFFFFFFFFFFF0;
+
+        CMP:
+            cmp RCX, 0;
+            je CALL;
+            sub RCX, 1;
+
+            mov RAX, FunctionParameter.sizeof;
+            mul RCX;
+            mov RDX, qword ptr [params];
+            mov RDX, qword ptr [RDX + 8];
+            mov RSI, qword ptr [RDX + RAX + FunctionParameter.rawParam.offsetof];
+            mov qword ptr [RSP + RCX * 8], RSI;
+            jmp CMP;
 
         CALL:
+            mov RCX, qword ptr [RSP];
+            mov RDX, qword ptr [RSP + 8];
+            mov R8, qword ptr [RSP + 16];
+            mov R9, qword ptr [RSP + 24];
+
             call funcaddr;
             mov dword ptr [retval], EAX;
-            
-            mov RSP, RDI;
+
+            mov RSP, RBX;
+            pop RBX;
+            pop RSI;
             pop RDI;
             pop RDX;
             pop RCX;
@@ -341,19 +420,19 @@ void main(string[] args)
         case "str":
             auto str = param.value.toStringz();
             param.strref ~= cast(void*)str;
-            param.rawParam = cast(uint)(str);
+            param.rawParam = cast(size_t)(str);
             break;
             
         case "wstr": 
             auto wstr = param.value.toUTF16z();
             param.strref ~= cast(void*)wstr;
-            param.rawParam = cast(uint)(wstr);
+            param.rawParam = cast(size_t)(wstr);
             break;
             
         case "out-str":
         case "out-wstr":
         case "out-buffer":
-            uint len = toUint(param.value);
+            size_t len = toUint(param.value);
             if (len == 0)
             {
                 // see if the next param is "len", if so, use the length instead of param.value
@@ -373,35 +452,35 @@ void main(string[] args)
             }
             param.bufferlen = len; // we waste buffer here if the param type is not wstr
             param.buffer = GC.malloc(len);
-            param.rawParam = cast(uint)(param.buffer);
+            param.rawParam = cast(size_t)(param.buffer);
             break;
             
         case "inout-plen":
         case "out-pint":
             param.buffer = GC.malloc(4);
             uint* p = cast(uint*)(param.buffer);
-            *p = toUint(param.value);
-            param.rawParam = cast(uint)(p);
+            *p = toUint32(param.value);
+            param.rawParam = cast(size_t)(p);
             break;
             
         case "callback":
             string paramspec = splitHead(param.value, ':');
             string returnspec = splitTail(param.value, ':', "1");
-            callbackReturnValue = toUint(returnspec);
+            callbackReturnValue = toUint32(returnspec);
             foreach (type; split(paramspec, ","))
             {
                 FunctionParameter p;
                 p.type = type;
                 callbackParams ~= p;
             }
-            param.rawParam = cast(uint)(&CallbackFunction);
+            param.rawParam = cast(size_t)(&CallbackFunction);
             break;
             
         case "struct":
             string[] fields = split(param.value, ",");
             param.bufferlen = fields.length * 4;
             param.buffer = GC.malloc(param.bufferlen);
-            param.rawParam = cast(uint)param.buffer;
+            param.rawParam = cast(size_t)param.buffer;
             void* p = param.buffer;
             foreach (field; fields)
             {
@@ -411,7 +490,7 @@ void main(string[] args)
                 switch (t)
                 {
                 case "int":
-                    *(cast(uint*)p) = toUint(v);
+                    *(cast(uint*)p) = toUint32(v);
                     p += 4;
                     break;
                 case "word":
@@ -421,14 +500,14 @@ void main(string[] args)
                 case "str":
                     auto str = v.toStringz();
                     param.strref ~= cast(void*)str;
-                    *(cast(uint*)p) = cast(uint)str;
-                    p += 4;
+                    *(cast(size_t*)p) = cast(size_t)str;
+                    p += size_t.sizeof;
                     break;
                 case "wstr":
                     auto wstr = v.toUTF16z();
                     param.strref ~= cast(void*)wstr;
-                    *(cast(uint*)p) = cast(uint)wstr;
-                    p += 4;
+                    *(cast(size_t*)p) = cast(size_t)wstr;
+                    p += size_t.sizeof;
                     break;
                 default:
                     writeln("unknow struct member type.");
@@ -441,7 +520,7 @@ void main(string[] args)
             param.subtypes = split(param.value, ",");
             param.bufferlen = param.subtypes.length * 4;
             param.buffer = GC.malloc(param.bufferlen);
-            param.rawParam = cast(uint)param.buffer;
+            param.rawParam = cast(size_t)param.buffer;
             break;
         }
     }
