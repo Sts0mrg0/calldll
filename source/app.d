@@ -29,8 +29,8 @@ struct FunctionParameter
     size_t bufferlen;
 };
 
-__gshared FunctionParameter[] callbackParams;
-__gshared uint callbackReturnValue;
+FunctionParameter[] callbackParams;
+uint callbackReturnValue;
 
 
 void CallbackFunction()
@@ -121,7 +121,7 @@ void CallbackFunction()
             cmp RSI, RDI;
             jge CALL;
 
-            mov RCX, qword ptr [RBP + 0x10 + RSI*4];
+            mov RCX, qword ptr [RBP + 0x10 + RSI*8];
             // the position of callbackParams[i].rawParam
             // := *(&callbackParams + 8) + FunctionParameter.sizeof * i + FunctionParameter.rawParam.offsetof
             mov RAX, FunctionParameter.sizeof;

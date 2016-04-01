@@ -6,3 +6,5 @@ __dummy.html
 *.obj
 
 calldll.exe
+*.visualdproj
+*.pdb

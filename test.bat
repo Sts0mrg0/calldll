@@ -20,5 +20,6 @@ calldll  kernel32.dll SetConsoleTextAttribute int:64 int:0xC >nul
 @echo This is a warning message in red
 @calldll  kernel32.dll SetConsoleTextAttribute int:64 int:0x7 >nul
 
+calldll kernel32.dll MessageBoxA int:0 str:"Message box using calldll" str:"info" int:0x40
 
 
