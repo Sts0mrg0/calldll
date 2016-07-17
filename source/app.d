@@ -29,8 +29,8 @@ struct FunctionParameter
     size_t bufferlen;
 };
 
-FunctionParameter[] callbackParams;
-uint callbackReturnValue;
+__gshared FunctionParameter[] callbackParams;
+__gshared uint callbackReturnValue;
 
 
 void CallbackFunction()
@@ -223,6 +223,58 @@ string decodeParam(FunctionParameter param)
         }
     }
     return values.join(",");
+}
+
+size_t processCallback(size_t[] args)
+{
+    return 0;
+}
+
+extern(Windows)
+{
+    alias size_t function() winapi_0;
+    alias size_t function(size_t) winapi_1;
+    alias size_t function(size_t, size_t) winapi_2;
+    alias size_t function(size_t, size_t, size_t) winapi_3;
+    alias size_t function(size_t, size_t, size_t, size_t) winapi_4;
+    alias size_t function(size_t, size_t, size_t, size_t, size_t) winapi_5;
+    alias size_t function(size_t, size_t, size_t, size_t, size_t, size_t) winapi_6;
+    alias size_t function(size_t, size_t, size_t, size_t, size_t, size_t, size_t) winapi_7;
+    alias size_t function(size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t) winapi_8;
+    alias size_t function(size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t) winapi_9;
+
+    size_t callback_thunk_0() { return processCallback([]); }
+    size_t callback_thunk_1(size_t a1                                                                                            ) {return processCallback([a1]); }
+    size_t callback_thunk_2(size_t a1, size_t a2                                                                                 ) {return processCallback([a1, a2]); }
+    size_t callback_thunk_3(size_t a1, size_t a2, size_t a3                                                                      ) {return processCallback([a1, a2, a3]); }
+    size_t callback_thunk_4(size_t a1, size_t a2, size_t a3, size_t a4                                                           ) {return processCallback([a1, a2, a3, a4]); }
+    size_t callback_thunk_5(size_t a1, size_t a2, size_t a3, size_t a4, size_t a5                                                ) {return processCallback([a1, a2, a3, a4, a5]); }
+    size_t callback_thunk_6(size_t a1, size_t a2, size_t a3, size_t a4, size_t a5, size_t a6                                     ) {return processCallback([a1, a2, a3, a4, a5, a6]); }
+    size_t callback_thunk_7(size_t a1, size_t a2, size_t a3, size_t a4, size_t a5, size_t a6, size_t a7                          ) {return processCallback([a1, a2, a3, a4, a5, a6, a7]); }
+    size_t callback_thunk_8(size_t a1, size_t a2, size_t a3, size_t a4, size_t a5, size_t a6, size_t a7, size_t a8               ) {return processCallback([a1, a2, a3, a4, a5, a6, a7, a8]); }
+    size_t callback_thunk_9(size_t a1, size_t a2, size_t a3, size_t a4, size_t a5, size_t a6, size_t a7, size_t a8, size_t a9    ) {return processCallback([a1, a2, a3, a4, a5, a6, a7, a8, a9]); }
+}
+
+
+size_t callFunctionNew(const(void)* funcaddr, size_t[] p)
+{
+    size_t ret = 0;
+    switch (p.length)
+    {
+    case 0: ret = (cast(winapi_0)funcaddr)(); break;
+    case 1: ret = (cast(winapi_1)funcaddr)(p[0]); break;
+    case 2: ret = (cast(winapi_2)funcaddr)(p[0], p[1]); break;
+    case 3: ret = (cast(winapi_3)funcaddr)(p[0], p[1], p[2]); break;
+    case 4: ret = (cast(winapi_4)funcaddr)(p[0], p[1], p[2], p[3]); break;
+    case 5: ret = (cast(winapi_5)funcaddr)(p[0], p[1], p[2], p[3], p[4]); break;
+    case 6: ret = (cast(winapi_6)funcaddr)(p[0], p[1], p[2], p[3], p[4], p[5]); break;
+    case 7: ret = (cast(winapi_7)funcaddr)(p[0], p[1], p[2], p[3], p[4], p[5], p[6]); break;
+    case 8: ret = (cast(winapi_8)funcaddr)(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]); break;
+    case 9: ret = (cast(winapi_9)funcaddr)(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]); break;
+    default: break;
+    }
+
+    return ret;
 }
                              
 
@@ -531,8 +583,16 @@ void main(string[] args)
         writeln("at most one parameter can be 'callback'");
         return;
     }
-                
-    uint retval = callFunction(addr, params);
+
+    size_t[] rawparams;
+    foreach (index, param; params)
+    {
+        rawparams ~= param.rawParam;
+    }
+
+    size_t retval = callFunctionNew(addr, rawparams);
+
+    //    uint retval = callFunction(addr, params);
 
     if (silentMode)
     {
